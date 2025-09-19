@@ -14,7 +14,7 @@ import {
   WAMessageUpdate,
   WAMessageStubType,
   WAGenericMediaMessage
-} from "baileys";
+} from "libzapitu-rf";
 import { Mutex } from "async-mutex";
 import { Op } from "sequelize";
 import moment from "moment";
@@ -89,10 +89,7 @@ const getTypeMessage = (msg: proto.IWebMessageInfo): string => {
 };
 
 const msgLocation = (
-  image:
-    | Uint8Array
-    | ArrayBuffer
-    | { valueOf(): ArrayBuffer | SharedArrayBuffer },
+  image: Uint8Array,
   latitude: number,
   longitude: number
 ) => {
@@ -108,10 +105,23 @@ const msgLocation = (
 export const getBodyFromTemplateMessage = (
   templateMessage: proto.Message.ITemplateMessage
 ) => {
+  const title =
+    templateMessage.interactiveMessageTemplate?.header?.title?.trim() ||
+    templateMessage.hydratedTemplate?.hydratedTitleText?.trim();
+
+  const body =
+    templateMessage.interactiveMessageTemplate?.body?.text?.trim() ||
+    templateMessage.hydratedTemplate?.hydratedContentText?.trim() ||
+    "";
+
+  const footer =
+    templateMessage.interactiveMessageTemplate?.footer?.text?.trim() ||
+    templateMessage.hydratedTemplate?.hydratedFooterText?.trim();
+
   return (
-    templateMessage.hydratedTemplate?.hydratedContentText ||
-    templateMessage.interactiveMessageTemplate?.body?.text ||
-    "unsupported templateMessage"
+    (title ? `*${title}*\n\n` : "") +
+    (body || "") +
+    (footer ? `\n\n⣿${footer}⣿` : "")
   );
 };
 
@@ -259,9 +269,6 @@ const getUnpackedMessage = (msg: proto.IWebMessageInfo) => {
     msg.message?.viewOnceMessage?.message ||
     msg.message?.viewOnceMessageV2?.message ||
     msg.message?.ephemeralMessage?.message ||
-    msg.message?.templateMessage?.hydratedTemplate ||
-    msg.message?.templateMessage?.hydratedFourRowTemplate ||
-    msg.message?.templateMessage?.fourRowTemplate ||
     msg.message?.interactiveMessage?.header ||
     msg.message?.highlyStructuredMessage?.hydratedHsm?.hydratedTemplate ||
     msg.message
@@ -282,6 +289,9 @@ const getMessageMedia = (message: proto.IMessage) => {
       ?.videoMessage ||
     message?.templateMessage?.interactiveMessageTemplate?.header
       ?.documentMessage ||
+    message?.templateMessage?.hydratedTemplate?.imageMessage ||
+    message?.templateMessage?.hydratedTemplate?.videoMessage ||
+    message?.templateMessage?.hydratedTemplate?.documentMessage ||
     null
   );
 };
@@ -1481,8 +1491,7 @@ const handleMessage = async (
     const bodyMessage = getBodyMessage(msg?.message);
     const msgType = getTypeMessage(msg);
 
-    const unpackedMessage =
-      msgType !== "templateMessage" && getUnpackedMessage(msg);
+    const unpackedMessage = getUnpackedMessage(msg);
     const messageMedia = unpackedMessage && getMessageMedia(unpackedMessage);
     if (msg.key.fromMe) {
       if (bodyMessage?.startsWith("\u200e")) return;
