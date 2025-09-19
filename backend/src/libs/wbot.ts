@@ -2,7 +2,6 @@ import * as Sentry from "@sentry/node";
 import makeWASocket, {
   WASocket,
   DisconnectReason,
-  makeCacheableSignalKeyStore,
   isJidBroadcast,
   CacheStore,
   WAMessageKey,
@@ -10,7 +9,7 @@ import makeWASocket, {
   proto,
   jidNormalizedUser,
   BinaryNode
-} from "baileys";
+} from "libzapitu-rf";
 
 import { Boom } from "@hapi/boom";
 // import MAIN_LOGGER from "@whiskeysockets/baileys/lib/Utils/logger";
@@ -18,11 +17,11 @@ import NodeCache from "node-cache";
 import { Op } from "sequelize";
 import { Agent } from "https";
 import { Mutex } from "async-mutex";
-import useVoiceCallsBaileys from "voice-calls-baileys";
+import useVoiceCallsZapitu from "voice-calls-zapitu";
 import {
   ClientToServerEvents,
   ServerToClientEvents
-} from "voice-calls-baileys/lib/services/transport.type";
+} from "voice-calls-zapitu/lib/services/transport.type";
 import { Socket } from "socket.io-client";
 import Whatsapp from "../models/Whatsapp";
 import { logger, loggerBaileys } from "../utils/logger";
@@ -126,6 +125,7 @@ const waVersionCache = new NodeCache({
 });
 
 const waVersionMutex = new Mutex();
+const checkWbotDuplicity = new Mutex();
 
 const getProjectWAVersion = async () => {
   try {
@@ -246,7 +246,6 @@ export const initWASocket = async (
         const { state, saveState } = await authState(whatsapp);
 
         const msgRetryCounterCache = new NodeCache();
-        const userDevicesCache: CacheStore = new NodeCache();
         const internalGroupCache = new NodeCache({
           stdTTL: 5 * 60,
           useClones: false
@@ -294,7 +293,7 @@ export const initWASocket = async (
           browser: [clientName, "Desktop", appVersion],
           auth: {
             creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, loggerBaileys)
+            keys: state.keys
           },
           version,
           defaultQueryTimeoutMs: 60000,
@@ -303,7 +302,6 @@ export const initWASocket = async (
           msgRetryCounterCache,
           // syncFullHistory: true,
           generateHighQualityLinkPreview: true,
-          userDevicesCache,
           getMessage,
           agent: proxy,
           fetchAgent: proxy,
@@ -405,7 +403,7 @@ export const initWASocket = async (
                 include: ["wavoip"]
               });
               if (whatsapp.wavoip) {
-                useVoiceCallsBaileys(
+                useVoiceCallsZapitu(
                   whatsapp.wavoip.token,
                   wsocket,
                   "open",
@@ -471,6 +469,28 @@ export const initWASocket = async (
                 wsocket.id = whatsapp.id;
                 sessions.push(wsocket);
               }
+
+              await checkWbotDuplicity.runExclusive(async () => {
+                const anotherSameJid = sessions.find(
+                  s =>
+                    s.id !== whatsapp.id &&
+                    (s.myJid === wsocket.myJid || s.myLid === wsocket.myLid)
+                );
+
+                if (anotherSameJid) {
+                  logger.warn(
+                    {
+                      id: anotherSameJid.id,
+                      jid: anotherSameJid.myJid,
+                      lid: anotherSameJid.myLid
+                    },
+                    "Another session with the same jid/lid detected"
+                  );
+                  const duplicatedWbot = getWbot(anotherSameJid.id);
+                  duplicatedWbot.logout();
+                  duplicatedWbot.ws.close();
+                }
+              });
 
               if (wsocket.isRefreshing) {
                 setTimeout(() => {
